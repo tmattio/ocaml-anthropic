@@ -370,6 +370,9 @@ type tool = {
       (** Human-readable description of the tool's purpose. *)
   input_schema : Yojson.Safe.t;
       (** JSON Schema defining the tool's parameters. *)
+  type_ : string option;  (** The type of the tool. *)
+  cache_control : Yojson.Safe.t option;
+      (** Cache control configuration for the tool. *)
 }
 (** [tool] defines a function that Claude can call.
 
@@ -469,17 +472,35 @@ module Messages : sig
     | Redacted_thinking_block of { id : string; name : string }
         (** Redacted reasoning content. *)
 
+  type server_tool_usage = { web_search_requests : int }
+  (** [server_tool_usage] tracks server-side tool usage statistics. *)
+
+  type service_tier = [ `Standard | `Priority | `Batch ]
+  (** [service_tier] indicates the processing tier for the request. *)
+
   type usage = {
     input_tokens : int;  (** Tokens processed from the input. *)
     output_tokens : int;  (** Tokens generated in the response. *)
     cache_creation_input_tokens : int option;
         (** Tokens used to create cache entries. *)
     cache_read_input_tokens : int option;  (** Tokens read from cache. *)
+    server_tool_use : server_tool_usage option;  (** Server-side tool usage. *)
+    service_tier : service_tier option;  (** Processing tier used. *)
   }
   (** [usage] tracks token consumption for billing and limits.
 
       Cache-related fields indicate when the caching beta feature is active.
       Token counts include all content, system prompts, and tool definitions. *)
+
+  type stop_reason =
+    [ `End_turn  (** Natural conversation end. *)
+    | `Max_tokens  (** Hit the token limit. *)
+    | `Stop_sequence  (** Encountered a stop sequence. *)
+    | `Tool_use  (** Stopped to use a tool. *)
+    | `Other of string  (** Other stop reason. *) ]
+  (** [stop_reason] indicates why generation stopped.
+
+      This field is optional in responses.*)
 
   type delta_usage = {
     input_tokens : int;  (** Cumulative input tokens. *)
@@ -494,15 +515,10 @@ module Messages : sig
 
   type response = {
     id : string;  (** Unique identifier for this response. *)
+    type_ : string;  (** The type of the response. *)
     model : string;  (** The model that generated the response. *)
     role : role;  (** Always [`Assistant] for responses. *)
-    stop_reason :
-      [ `End_turn  (** Natural conversation end. *)
-      | `Max_tokens  (** Hit the token limit. *)
-      | `Stop_sequence  (** Encountered a stop sequence. *)
-      | `Tool_use  (** Stopped to use a tool. *)
-      | `Other of string  (** Other stop reason. *) ];
-        (** Why generation stopped. *)
+    stop_reason : stop_reason option;  (** Why generation stopped. *)
     stop_sequence : string option;
         (** The stop sequence encountered, if any. *)
     content : response_content_block list;  (** Generated content blocks. *)
@@ -1097,10 +1113,12 @@ module Beta : sig
   module Files : sig
     type t = {
       id : string;  (** Unique file identifier. *)
+      type_ : string;  (** The type of the file. *)
       filename : string;  (** Original filename. *)
       mime_type : string;  (** MIME type of the file. *)
       size_bytes : int;  (** File size in bytes. *)
       created_at : string;  (** ISO 8601 creation timestamp. *)
+      downloadable : bool option;  (** Whether the file can be downloaded. *)
     }
     (** [t] represents metadata about an uploaded file.
 

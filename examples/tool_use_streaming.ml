@@ -59,6 +59,8 @@ let () =
                   ] );
               ("required", `List [ `String "location" ]);
             ];
+        type_ = None;
+        cache_control = None;
       };
       {
         name = "get_temperature_unit";
@@ -79,6 +81,8 @@ let () =
                   ] );
               ("required", `List [ `String "country" ]);
             ];
+        type_ = None;
+        cache_control = None;
       };
       {
         name = "get_weather";
@@ -120,6 +124,8 @@ let () =
               ( "required",
                 `List [ `String "lat"; `String "long"; `String "unit" ] );
             ];
+        type_ = None;
+        cache_control = None;
       };
     ]
   in

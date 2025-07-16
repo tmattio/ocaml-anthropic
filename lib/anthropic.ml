@@ -77,7 +77,9 @@ let page_of_yojson of_item_yojson json =
     |> List.map (fun j ->
            match of_item_yojson j with Ok v -> v | Error e -> failwith e)
   in
-  let has_more = member "has_more" json |> to_bool in
+  let has_more =
+    member "has_more" json |> to_bool_option |> Option.value ~default:false
+  in
   let first_id =
     member "first_id" json |> function
     | `Null -> None
@@ -237,8 +239,10 @@ type tool = {
   name : string;
   description : string option; [@default None]
   input_schema : Yojson.Safe.t; [@key "input_schema"]
+  type_ : string option; [@key "type"] [@default None]
+  cache_control : Yojson.Safe.t option; [@default None]
 }
-[@@deriving to_yojson]
+[@@deriving to_yojson { strict = false }]
 
 type tool_choice = Auto | Any | Tool of string | Tool_none
 
@@ -535,11 +539,24 @@ module Messages = struct
     | Type_error (msg, _) -> Error ("JSON parsing error: " ^ msg)
     | e -> Error (Printexc.to_string e)
 
+  type server_tool_usage = { web_search_requests : int }
+  [@@deriving of_yojson { strict = false }]
+
+  type service_tier = [ `Standard | `Priority | `Batch ]
+
+  let service_tier_of_yojson = function
+    | `String "standard" -> Ok `Standard
+    | `String "priority" -> Ok `Priority
+    | `String "batch" -> Ok `Batch
+    | _ -> Error "Invalid service_tier"
+
   type usage = {
     input_tokens : int;
     output_tokens : int;
     cache_creation_input_tokens : int option; [@default None]
     cache_read_input_tokens : int option; [@default None]
+    server_tool_use : server_tool_usage option; [@default None]
+    service_tier : service_tier option; [@default None]
   }
   [@@deriving of_yojson { strict = false }]
 
@@ -552,6 +569,9 @@ module Messages = struct
   }
   [@@deriving of_yojson { strict = false }]
 
+  type stop_reason =
+    [ `End_turn | `Max_tokens | `Stop_sequence | `Tool_use | `Other of string ]
+
   let stop_reason_of_yojson = function
     | `String "end_turn" -> Ok `End_turn
     | `String "max_tokens" -> Ok `Max_tokens
@@ -562,11 +582,10 @@ module Messages = struct
 
   type response = {
     id : string;
+    type_ : string; [@key "type"]
     model : string;
     role : role;
-    stop_reason :
-      [ `End_turn | `Max_tokens | `Stop_sequence | `Tool_use | `Other of string ];
-        [@of_yojson stop_reason_of_yojson]
+    stop_reason : stop_reason option; [@default None]
     stop_sequence : string option; [@default None]
     content : response_content_block list;
     usage : usage;
@@ -655,9 +674,10 @@ module Messages = struct
             let response =
               {
                 id;
+                type_ = "message";
                 model;
                 role;
-                stop_reason = `End_turn;
+                stop_reason = None;
                 (* Default for streaming *)
                 stop_sequence = None;
                 content = [];
@@ -667,6 +687,8 @@ module Messages = struct
                     output_tokens = 0;
                     cache_creation_input_tokens = None;
                     cache_read_input_tokens = None;
+                    server_tool_use = None;
+                    service_tier = None;
                   };
               }
             in
@@ -856,10 +878,17 @@ module Messages = struct
                     output_tokens = usage.output_tokens;
                     cache_creation_input_tokens = cache_creation;
                     cache_read_input_tokens = cache_read;
+                    server_tool_use = None;
+                    service_tier = None;
                   }
                 in
                 response_ref :=
-                  Some { r with stop_reason; usage = updated_usage }
+                  Some
+                    {
+                      r with
+                      stop_reason = Some stop_reason;
+                      usage = updated_usage;
+                    }
             | None -> ());
             process_events ()
         | Content_block_stop _ | Ping -> process_events ()
@@ -1009,7 +1038,7 @@ module Batches = struct
   type t = {
     id : string;
     type_ : string; [@key "type"]
-    processing_status : status; [@of_yojson status_of_yojson]
+    processing_status : status;
     request_counts : request_counts;
     created_at : string;
     expires_at : string;
@@ -1155,10 +1184,12 @@ module Beta = struct
   module Files = struct
     type t = {
       id : string;
+      type_ : string; [@key "type"]
       filename : string;
       mime_type : string;
       size_bytes : int;
       created_at : string;
+      downloadable : bool option; [@default None]
     }
     [@@deriving of_yojson { strict = false }]
 
