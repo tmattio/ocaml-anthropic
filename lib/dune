@@ -11,6 +11,7 @@
   ca-certs
   mirage-crypto-rng.unix
   tls
-  domain-name)
+  domain-name
+  logs)
  (preprocess
   (pps ppx_deriving_yojson)))

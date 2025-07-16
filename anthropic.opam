@@ -22,6 +22,7 @@ depends: [
   "mirage-crypto-rng"
   "yojson"
   "ppx_deriving_yojson"
+  "logs"
   "odoc" {with-doc}
 ]
 build: [

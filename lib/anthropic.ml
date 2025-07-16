@@ -1,5 +1,7 @@
 open Eio.Std
 
+module Log = (val Logs.src_log (Logs.Src.create "anthropic") : Logs.LOG)
+
 type client = {
   sw : Eio.Switch.t;
   api_key : string;
@@ -264,13 +266,19 @@ let default_https ~authenticator =
 
 let create ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
     ?(max_retries = 2) () =
+  Log.debug (fun m -> m "Creating Anthropic client with base URL: %s" base_url);
   let api_key =
     match api_key with
-    | Some key -> key
+    | Some key -> 
+        Log.debug (fun m -> m "Using provided API key");
+        key
     | None -> (
         match Sys.getenv_opt "ANTHROPIC_API_KEY" with
-        | Some key -> key
+        | Some key -> 
+            Log.debug (fun m -> m "Using API key from ANTHROPIC_API_KEY environment variable");
+            key
         | None ->
+            Log.err (fun m -> m "No API key provided");
             raise
               (Invalid_argument
                  "API key must be provided either via the 'api_key' argument \
@@ -336,6 +344,8 @@ module Api_helpers = struct
 
   let rec request client ~meth ~path ~headers ?body ~retries_left ~current_delay
       () =
+    Log.debug (fun m -> m "Making %s request to %s (retries left: %d)" 
+      (Cohttp.Code.string_of_method meth) path retries_left);
     let headers_with_retry =
       Cohttp.Header.add headers "x-stainless-retry-count"
         (string_of_int (client.max_retries - retries_left))
@@ -349,14 +359,19 @@ module Api_helpers = struct
       in
       let uri = Uri.with_path client.base_url full_path in
       try
+        Log.debug (fun m -> m "Sending request to URI: %s" (Uri.to_string uri));
         Ok
           (Cohttp_eio.Client.call client.cohttp_client ~sw:client.sw
              ~headers:headers_with_retry ?body meth uri)
-      with exn -> Error (Connection_error exn)
+      with exn -> 
+        Log.err (fun m -> m "Connection error: %s" (Printexc.to_string exn));
+        Error (Connection_error exn)
     in
     match do_request () with
     | Ok (resp, body_stream) -> (
         let status = Cohttp.Response.status resp in
+        Log.debug (fun m -> m "Received response with status: %s" 
+          (Cohttp.Code.string_of_status status));
         if Cohttp.Code.is_success (Cohttp.Code.code_of_status status) then
           Ok (resp, body_stream)
         else
@@ -364,6 +379,7 @@ module Api_helpers = struct
             Eio.Buf_read.of_flow ~max_size:max_int body_stream
             |> Eio.Buf_read.take_all
           in
+          Log.warn (fun m -> m "Error response body: %s" error_body);
           let err =
             try
               let json = Yojson.Safe.from_string error_body in
@@ -371,15 +387,23 @@ module Api_helpers = struct
                 Yojson.Safe.Util.member "error" json |> api_error_of_yojson
               with
               | Ok { type_; message; request_id } ->
+                  let error_type = api_error_type_of_string type_ in
+                  Log.err (fun m -> m "API error (%s): %s (request_id: %s)" 
+                    type_ message (Option.value request_id ~default:"none"));
                   Error
                     (Api_error
                        {
-                         type_ = api_error_type_of_string type_;
+                         type_ = error_type;
                          message;
                          request_id;
                        })
-              | Error _ -> Error (Http_error { status; message = error_body })
-            with _ -> Error (Http_error { status; message = error_body })
+              | Error _ -> 
+                  Log.err (fun m -> m "HTTP error %s: %s" 
+                    (Cohttp.Code.string_of_status status) error_body);
+                  Error (Http_error { status; message = error_body })
+            with _ -> 
+              Log.err (fun m -> m "Failed to parse error response");
+              Error (Http_error { status; message = error_body })
           in
           match err with
           | Error e when is_retryable e && retries_left > 0 ->
@@ -387,18 +411,17 @@ module Api_helpers = struct
                 Option.value ~default:current_delay
                   (get_retry_after_delay (Cohttp.Response.headers resp))
               in
-              traceln "Retrying request to %s in %.2fs (%d retries left)" path
-                delay retries_left;
+              Log.info (fun m -> m "Retrying request to %s in %.2fs (%d retries left)" path
+                delay retries_left);
               Eio.Time.sleep client.clock delay;
               request client ~meth ~path ~headers ?body
                 ~retries_left:(retries_left - 1) ~current_delay:(delay *. 1.5)
                 ()
           | error_result -> error_result)
     | Error e when is_retryable e && retries_left > 0 ->
-        traceln
-          "Retrying request to %s due to connection error in %.2fs (%d retries \
-           left)"
-          path current_delay retries_left;
+        Log.info (fun m -> m
+          "Retrying request to %s due to connection error in %.2fs (%d retries left)"
+          path current_delay retries_left);
         Eio.Time.sleep client.clock current_delay;
         request client ~meth ~path ~headers ?body
           ~retries_left:(retries_left - 1) ~current_delay:(current_delay *. 1.5)
@@ -596,6 +619,8 @@ module Messages = struct
 
   let create client ?max_tokens ?temperature ?top_k ?top_p ?stop_sequences
       ?system ?tools ?tool_choice ?metadata ~model ~messages () =
+    Log.info (fun m -> m "Creating message with model %s, %d messages" 
+      (model_to_string model) (List.length messages));
     let body_json =
       create_request_body ~model ~messages ?max_tokens ?temperature ?top_k
         ?top_p ?stop_sequences ?system ?tools ?tool_choice ?metadata ()
@@ -696,6 +721,8 @@ module Messages = struct
   let create_stream client ?max_tokens ?temperature ?top_k ?top_p
       ?stop_sequences ?system ?tools ?tool_choice ?metadata ~model ~messages ()
       =
+    Log.info (fun m -> m "Creating streaming message with model %s, %d messages" 
+      (model_to_string model) (List.length messages));
     let body_json =
       create_request_body ~model ~messages ?max_tokens ?temperature ?top_k
         ?top_p ?stop_sequences ?system ?tools ?tool_choice ?metadata
@@ -710,6 +737,7 @@ module Messages = struct
     with
     | Ok (_resp, body) ->
         (* Success case - stream handling *)
+        Log.debug (fun m -> m "Successfully started message stream");
         let stream = Eio.Stream.create 16 in
         let fiber () =
           try
@@ -728,7 +756,7 @@ module Messages = struct
                     match parse_stream_event event data with
                     | Ok ev -> Eio.Stream.add stream ev
                     | Error e ->
-                        traceln "Stream parse error: %s" e;
+                        Log.warn (fun m -> m "Stream parse error: %s" e);
                         (* If it's a stream error event, we should stop the stream *)
                         if String.starts_with ~prefix:"Stream error:" e then
                           Eio.Stream.add stream Message_stop)
@@ -742,9 +770,10 @@ module Messages = struct
                         (String.trim (String.concat ":" rest))
                   | _ -> () (* Ignore other fields like 'id' and comments *)
               done
-            with End_of_file -> ()
+            with End_of_file -> 
+              Log.debug (fun m -> m "Stream ended normally")
           with exn ->
-            traceln "Streaming fiber exited with: %s" (Printexc.to_string exn);
+            Log.err (fun m -> m "Streaming fiber exited with: %s" (Printexc.to_string exn));
             Eio.Stream.add stream Message_stop
         in
         Fiber.fork ~sw:client.sw fiber;
@@ -930,6 +959,7 @@ module Batches = struct
   (* Use the generic page_of_yojson function defined above *)
 
   let create client ~(requests : request list) () =
+    Log.info (fun m -> m "Creating batch with %d requests" (List.length requests));
     let body_json =
       `Assoc
         [
@@ -1036,7 +1066,7 @@ module Batches = struct
               done
             with End_of_file -> ()
           with exn ->
-            traceln "Results stream exited with: %s" (Printexc.to_string exn)
+            Log.err (fun m -> m "Results stream exited with: %s" (Printexc.to_string exn))
         in
         Fiber.fork ~sw:client.sw fiber;
         Ok stream
@@ -1058,6 +1088,7 @@ module Beta = struct
     let beta_header = ("anthropic-beta", "files-api-2025-04-14")
 
     let upload client ~filename ~media_type ~content () =
+      Log.info (fun m -> m "Uploading file: %s (media_type: %s)" filename media_type);
       Random.self_init ();
       let boundary =
         "---------------------------" ^ string_of_int (Random.bits ())

@@ -23,6 +23,6 @@
    enabling interaction with Claude models. It supports both synchronous and
    streaming responses, tool use, batch processing, and file uploads (beta).")
  (depends
-  ocaml cohttp cohttp-eio eio tls-eio ca-certs mirage-crypto-rng yojson ppx_deriving_yojson)
+  ocaml cohttp cohttp-eio eio tls-eio ca-certs mirage-crypto-rng yojson ppx_deriving_yojson logs)
  (tags
   ("anthropic" "claude" "ai" "llm" "api" "client" "streaming" "eio")))
