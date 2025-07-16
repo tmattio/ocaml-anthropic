@@ -1,6 +1,8 @@
-# Changes
+# Changelog
 
-## 0.1.0 (Unreleased)
+All notable changes to this project will be documented in this file.
+
+## [0.1.0] - 2025-07-16
 
 Initial release of OCaml Anthropic bindings.
 
@@ -14,3 +16,5 @@ Initial release of OCaml Anthropic bindings.
 - Models API for querying available models
 - Beta Files API for file uploads and references
 - Automatic retry logic with exponential backoff
+
+[0.1.0]: https://github.com/tmattio/ocaml-anthropic/releases/tag/v0.1.0
