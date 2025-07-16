@@ -1,14 +1,16 @@
 (** OCaml bindings for the Anthropic API.
 
-    This library provides type-safe OCaml bindings to the Anthropic API. All API
-    operations are non-blocking when used with Eio, supporting both synchronous
-    and streaming responses.
+    This library provides type-safe OCaml bindings to the Anthropic API, and
+    supports both synchronous and streaming responses.
 
     {1 Getting Started}
 
     Create a {!client} using your API key, then interact with the Anthropic API
     through sub-modules like {!Messages} and {!Models}. The library requires an
-    Eio environment for concurrent operations.
+    Eio environment.
+
+    The client manages connection pooling and automatic retries. Stream
+    operations provide backpressure control through Eio streams
 
     Example: Sends a simple message to Claude.
     {[
@@ -31,13 +33,7 @@
             | [ Text_block { text } ] -> traceln "Assistant: %s" text
             | _ -> traceln "Received unexpected content.")
         | Error err -> traceln "Error: %s" (string_of_error err)
-    ]}
-
-    {1 Key Invariants}
-
-    All API operations return [('a, error) result] types for explicit error
-    handling. The client manages connection pooling and automatic retries.
-    Stream operations provide backpressure control through Eio streams. *)
+    ]} *)
 
 (** {1 Core Types} *)
 
@@ -45,14 +41,9 @@ type client
 (** [client] represents a configured Anthropic API client.
 
     The client handles authentication, network requests, and automatic retries.
-    All API operations require a client instance. The client is thread-safe and
-    can be shared across multiple fibers. *)
+    All API operations require a client instance. *)
 
-(** [api_error_type] categorizes specific API error responses.
-
-    Each variant corresponds to a different class of API error returned by the
-    Anthropic service. The [Api_error_other] variant handles any unrecognized
-    error types. *)
+(** [api_error_type] categorizes specific API error responses. *)
 type api_error_type =
   | Invalid_request_error  (** The request is malformed or invalid. *)
   | Authentication_error  (** The API key is invalid or missing. *)
@@ -183,8 +174,7 @@ type model =
     Models are organized by family (Haiku, Sonnet, Opus) and version. Use the
     "Latest" variants for automatic updates to the newest stable version within
     a family. The [`Other] variant allows specifying custom model identifiers.
-
-    @raise Invalid_argument if the model is not available for your API tier. *)
+*)
 
 type role = [ `User | `Assistant ]
 (** [role] identifies the author of a message in a conversation.
@@ -219,53 +209,23 @@ type input_content_block =
       input : Yojson.Safe.t;  (** Arguments for the tool. *)
     }  (** Tool use requests from assistant responses. *)
 
-(** Helper functions for creating content blocks.
-
-    This module provides convenient constructors for each content block type,
-    avoiding the need to directly construct variant values. *)
+(** Helper functions for creating content blocks. *)
 module Content_block : sig
   val text : string -> input_content_block
-  (** [text s] creates a text content block.
-
-      Example: Creates a simple text message.
-      {[
-        let content = Content_block.text "Hello, Claude!" in
-        content = Text "Hello, Claude!"
-      ]} *)
+  (** [text s] creates a text content block. *)
 
   val image : media_type:string -> data:string -> input_content_block
   (** [image ~media_type ~data] creates an image content block.
 
       The [data] must be base64-encoded image data. Supported formats include
-      JPEG, PNG, GIF, and WebP.
-
-      Example: Creates an image content block.
-      {[
-        let content =
-          Content_block.image ~media_type:"image/png" ~data:base64_data
-        in
-        match content with
-        | Image { media_type = "image/png"; _ } -> true
-        | _ -> false
-      ]} *)
+      JPEG, PNG, GIF, and WebP. *)
 
   val document :
     name:string -> content:string -> media_type:string -> input_content_block
   (** [document ~name ~content ~media_type] creates a document content block.
 
       The [content] must be base64-encoded document data. The [name] is
-      displayed to the model for context.
-
-      Example: Creates a PDF document block.
-      {[
-        let content =
-          Content_block.document ~name:"report.pdf" ~content:base64_pdf_data
-            ~media_type:"application/pdf"
-        in
-        match content with
-        | Document { name = "report.pdf"; _ } -> true
-        | _ -> false
-      ]} *)
+      displayed to the model for context. *)
 
   val tool_result :
     tool_use_id:string ->
@@ -279,37 +239,14 @@ module Content_block : sig
       Tool results must reference a [tool_use_id] from a previous assistant
       message. Set [is_error] to [true] when the tool execution failed. The
       [content] parameter accepts structured JSON data which will be
-      automatically serialized.
-
-      Example: Reports a successful tool execution.
-      {[
-        let result =
-          Content_block.tool_result ~tool_use_id:"toolu_01A09q90qw90lq917835lq9"
-            ~content:(`Assoc [ ("temperature", `Int 72) ])
-            ()
-        in
-        match result with
-        | Tool_result { content = _; is_error = None; _ } -> true
-        | _ -> false
-      ]} *)
+      automatically serialized. *)
 
   val tool_use :
     id:string -> name:string -> input:Yojson.Safe.t -> input_content_block
   (** [tool_use ~id ~name ~input] creates a tool use content block.
 
       This is used to represent tool invocations from assistant responses when
-      maintaining conversation history.
-
-      Example: Creates a tool use block.
-      {[
-        let content =
-          Content_block.tool_use ~id:"toolu_123" ~name:"get_weather"
-            ~input:(`Assoc [ ("location", `String "San Francisco") ])
-        in
-        match content with
-        | Tool_use { id = "toolu_123"; name = "get_weather"; _ } -> true
-        | _ -> false
-      ]} *)
+      maintaining conversation history. *)
 end
 
 type message = {
@@ -323,45 +260,19 @@ type message = {
     user or assistant. Conversations must start with a user message and
     alternate between roles. *)
 
-(** Helper functions for creating messages.
-
-    This module simplifies message creation by automatically setting the
-    appropriate role. *)
+(** Helper functions for creating messages. *)
 module Message : sig
   val user : input_content_block list -> message
   (** [user content] creates a user message.
 
       User messages represent human input in the conversation. They can contain
-      text, images, documents, or tool results.
-
-      Example: Creates a multimodal user message.
-      {[
-        let msg =
-          Message.user
-            [
-              Content_block.text "What's in this image?";
-              Content_block.image ~media_type:"image/jpeg" ~data:img_data;
-            ]
-        in
-        msg.role = `User && List.length msg.content = 2
-      ]} *)
+      text, images, documents, or tool results. *)
 
   val assistant : input_content_block list -> message
   (** [assistant content] creates an assistant message.
 
       Assistant messages represent Claude's responses. They typically contain
-      text or tool use requests.
-
-      Example: Creates an assistant response.
-      {[
-        let msg =
-          Message.assistant
-            [
-              Content_block.text "I can see a beautiful sunset over the ocean.";
-            ]
-        in
-        msg.role = `Assistant
-      ]} *)
+      text or tool use requests. *)
 end
 
 type tool = {
@@ -380,10 +291,7 @@ type tool = {
     computations. The [input_schema] must be a valid JSON Schema object
     describing the expected parameters. *)
 
-(** [tool_choice] controls how Claude selects tools during generation.
-
-    This type allows fine-grained control over tool usage, from automatic
-    selection to forcing specific tools or disabling them entirely. *)
+(** [tool_choice] controls how Claude selects tools during generation. *)
 type tool_choice =
   | Auto
       (** Claude decides whether and which tools to use based on the
@@ -435,26 +343,16 @@ val create_client :
     {[
       Eio_main.run @@ fun env ->
       Switch.run @@ fun sw ->
-      let client = Anthropic.create ~sw ~env () in
-      (* Use client for API operations *)
-    ]}
-
-    Example: Creates a client with custom configuration.
-    {[
       let client = Anthropic.create ~sw ~env
         ~api_key:"sk-ant-api03-..."
-        ~max_retries:5
-        () in
-      (* Client will retry failed requests up to 5 times *)
+        ~max_retries:5 () in
+      (* Use client for API operations *)
     ]} *)
-
-(** {1 API Modules} *)
 
 (** Messages API for conversations with Claude.
 
     This module provides functions to create messages and handle responses,
-    supporting both synchronous and streaming modes. All functions return
-    results for explicit error handling. *)
+    supporting both synchronous and streaming modes. *)
 module Messages : sig
   (** [response_content_block] represents content in Claude's responses.
 
@@ -612,31 +510,6 @@ module Messages : sig
                 | Messages.Text_block { text } -> print_endline text | _ -> ())
               resp.content
         | Error e -> Printf.eprintf "Error: %s\n" (string_of_error e)
-      ]}
-
-      Example: Uses tools for function calling.
-      {[
-        let calc_tool =
-          {
-            name = "calculator";
-            description = Some "Perform basic arithmetic";
-            input_schema =
-              `Assoc
-                [
-                  ("type", `String "object");
-                  ( "properties",
-                    `Assoc
-                      [
-                        ("operation", `Assoc [ ("type", `String "string") ]);
-                        ("x", `Assoc [ ("type", `String "number") ]);
-                        ("y", `Assoc [ ("type", `String "number") ]);
-                      ] );
-                ];
-          }
-        in
-        Messages.send client ~model:`Claude_3_5_Sonnet_Latest
-          ~messages:[ Message.user [ Content_block.text "What is 15 * 37?" ] ]
-          ~tools:[ calc_tool ] ~max_tokens:500 ()
       ]} *)
 
   val send_stream :
@@ -702,8 +575,8 @@ module Messages : sig
   (** [iter_stream client ~on_event ~on_error ... ()] processes a stream with
       callbacks.
 
-      This convenience function handles stream lifecycle automatically. It opens
-      the stream, processes all events, and ensures proper cleanup.
+      This function handles stream lifecycle automatically. It opens the stream,
+      processes all events, and ensures proper cleanup.
 
       @param on_event Called for each stream event.
       @param on_error Called if streaming fails.
@@ -882,10 +755,7 @@ module Models : sig
     display_name : string;  (** Human-readable model name. *)
     type_ : string;  (** Model type (e.g., "chat"). *)
   }
-  (** [t] contains metadata about an available model.
-
-      Model information includes identifiers, creation timestamps, and display
-      names for user interfaces. *)
+  (** [t] contains metadata about an available model. *)
 
   val get : client -> model_id:string -> unit -> (t, error) result
   (** [get client ~model_id ()] retrieves information about a specific model.
@@ -1187,8 +1057,7 @@ module Beta : sig
       (Cohttp.Response.t * Cohttp_eio.Body.t, error) result
     (** [download client ~file_id ()] retrieves file content.
 
-        Returns the raw HTTP response and body for flexible handling. The body
-        is an Eio flow that should be consumed or closed.
+        Returns the raw HTTP response and body for flexible handling.
 
         Example: Downloads and saves a file.
         {[
@@ -1256,9 +1125,6 @@ module Beta : sig
       (response, error) result
     (** [send_with_betas client ?betas ... ~messages ()] sends a message with
         beta features.
-
-        This function extends the standard create with support for beta content
-        types and features.
 
         @param betas
           Beta feature headers to enable (e.g.,
