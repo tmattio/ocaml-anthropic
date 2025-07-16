@@ -762,6 +762,117 @@ module Messages : sig
         | Error e ->
             Printf.eprintf "Stream creation error: %s\n" (string_of_error e)
       ]} *)
+
+  (** {2 Message Building Helpers} *)
+
+  val user : string -> message
+  (** [user text] creates a user message with text content.
+
+      Example:
+      {[
+        let msg = Messages.user "What is the capital of France?"
+      ]} *)
+
+  val assistant : string -> message
+  (** [assistant text] creates an assistant message with text content.
+
+      Example:
+      {[
+        let msg = Messages.assistant "The capital of France is Paris."
+      ]} *)
+
+  val user_with_content : input_content_block list -> message
+  (** [user_with_content blocks] creates a user message with custom content
+      blocks.
+
+      Example:
+      {[
+        let msg =
+          Messages.user_with_content
+            [
+              Text "Here's an image:";
+              Image { media_type = "image/png"; data = base64_data };
+            ]
+      ]} *)
+
+  val assistant_with_content : input_content_block list -> message
+  (** [assistant_with_content blocks] creates an assistant message with custom
+      content blocks. *)
+
+  val tool_result_message :
+    tool_use_id:string -> content:string -> ?is_error:bool -> unit -> message
+  (** [tool_result_message ~tool_use_id ~content ?is_error ()] creates a user
+      message containing a tool result.
+
+      Example:
+      {[
+        let msg =
+          Messages.tool_result_message ~tool_use_id:"tool_123"
+            ~content:"{\"result\": 42}" ()
+      ]} *)
+
+  (** {2 Content Extraction Helpers} *)
+
+  val extract_text : response_content_block list -> string option
+  (** [extract_text blocks] extracts the first text content from response
+      blocks.
+
+      Example:
+      {[
+        match Messages.extract_text response.content with
+        | Some text -> print_endline text
+        | None -> print_endline "No text content"
+      ]} *)
+
+  val extract_all_text : response_content_block list -> string list
+  (** [extract_all_text blocks] extracts all text content from response blocks.
+  *)
+
+  val find_tool_use :
+    response_content_block list -> (string * string * Yojson.Safe.t) option
+  (** [find_tool_use blocks] finds the first tool use in response blocks.
+      Returns [(id, name, input)] if found. *)
+
+  val response_to_input_content :
+    response_content_block list -> input_content_block list
+  (** [response_to_input_content blocks] converts response blocks to input
+      blocks for use in conversation continuations. *)
+
+  val response_content_to_input : response_content_block -> input_content_block
+  (** [response_content_to_input block] converts a single response block to an
+      input block. *)
+end
+
+(** Tools module for handling tool execution patterns.
+
+    This module provides utilities to simplify tool handling in conversations.
+*)
+module Tools : sig
+  type tool_execution_result =
+    | Success of Yojson.Safe.t
+    | Error of string  (** Result of executing a tool. *)
+
+  val make_tool_result :
+    tool_use_id:string -> result:tool_execution_result -> input_content_block
+  (** [make_tool_result ~tool_use_id ~result] creates a tool result content
+      block.
+
+      Example:
+      {[
+        let result =
+          Tools.make_tool_result ~tool_use_id:"tool_123"
+            ~result:(Success (`Assoc [ ("answer", `Int 42) ]))
+      ]} *)
+
+  val requires_tool_execution : Messages.response_content_block list -> bool
+  (** [requires_tool_execution blocks] checks if response contains tool use
+      requests. *)
+
+  val extract_tool_calls :
+    Messages.response_content_block list ->
+    (string * string * Yojson.Safe.t) list
+  (** [extract_tool_calls blocks] extracts all tool calls from response blocks.
+      Returns a list of [(id, name, input)] tuples. *)
 end
 
 (** Models API for querying available Claude models.

@@ -1,5 +1,4 @@
 open Eio.Std
-
 module Log = (val Logs.src_log (Logs.Src.create "anthropic") : Logs.LOG)
 
 type client = {
@@ -269,13 +268,14 @@ let create ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
   Log.debug (fun m -> m "Creating Anthropic client with base URL: %s" base_url);
   let api_key =
     match api_key with
-    | Some key -> 
+    | Some key ->
         Log.debug (fun m -> m "Using provided API key");
         key
     | None -> (
         match Sys.getenv_opt "ANTHROPIC_API_KEY" with
-        | Some key -> 
-            Log.debug (fun m -> m "Using API key from ANTHROPIC_API_KEY environment variable");
+        | Some key ->
+            Log.debug (fun m ->
+                m "Using API key from ANTHROPIC_API_KEY environment variable");
             key
         | None ->
             Log.err (fun m -> m "No API key provided");
@@ -344,8 +344,10 @@ module Api_helpers = struct
 
   let rec request client ~meth ~path ~headers ?body ~retries_left ~current_delay
       () =
-    Log.debug (fun m -> m "Making %s request to %s (retries left: %d)" 
-      (Cohttp.Code.string_of_method meth) path retries_left);
+    Log.debug (fun m ->
+        m "Making %s request to %s (retries left: %d)"
+          (Cohttp.Code.string_of_method meth)
+          path retries_left);
     let headers_with_retry =
       Cohttp.Header.add headers "x-stainless-retry-count"
         (string_of_int (client.max_retries - retries_left))
@@ -363,15 +365,16 @@ module Api_helpers = struct
         Ok
           (Cohttp_eio.Client.call client.cohttp_client ~sw:client.sw
              ~headers:headers_with_retry ?body meth uri)
-      with exn -> 
+      with exn ->
         Log.err (fun m -> m "Connection error: %s" (Printexc.to_string exn));
         Error (Connection_error exn)
     in
     match do_request () with
     | Ok (resp, body_stream) -> (
         let status = Cohttp.Response.status resp in
-        Log.debug (fun m -> m "Received response with status: %s" 
-          (Cohttp.Code.string_of_status status));
+        Log.debug (fun m ->
+            m "Received response with status: %s"
+              (Cohttp.Code.string_of_status status));
         if Cohttp.Code.is_success (Cohttp.Code.code_of_status status) then
           Ok (resp, body_stream)
         else
@@ -388,20 +391,17 @@ module Api_helpers = struct
               with
               | Ok { type_; message; request_id } ->
                   let error_type = api_error_type_of_string type_ in
-                  Log.err (fun m -> m "API error (%s): %s (request_id: %s)" 
-                    type_ message (Option.value request_id ~default:"none"));
-                  Error
-                    (Api_error
-                       {
-                         type_ = error_type;
-                         message;
-                         request_id;
-                       })
-              | Error _ -> 
-                  Log.err (fun m -> m "HTTP error %s: %s" 
-                    (Cohttp.Code.string_of_status status) error_body);
+                  Log.err (fun m ->
+                      m "API error (%s): %s (request_id: %s)" type_ message
+                        (Option.value request_id ~default:"none"));
+                  Error (Api_error { type_ = error_type; message; request_id })
+              | Error _ ->
+                  Log.err (fun m ->
+                      m "HTTP error %s: %s"
+                        (Cohttp.Code.string_of_status status)
+                        error_body);
                   Error (Http_error { status; message = error_body })
-            with _ -> 
+            with _ ->
               Log.err (fun m -> m "Failed to parse error response");
               Error (Http_error { status; message = error_body })
           in
@@ -411,17 +411,20 @@ module Api_helpers = struct
                 Option.value ~default:current_delay
                   (get_retry_after_delay (Cohttp.Response.headers resp))
               in
-              Log.info (fun m -> m "Retrying request to %s in %.2fs (%d retries left)" path
-                delay retries_left);
+              Log.info (fun m ->
+                  m "Retrying request to %s in %.2fs (%d retries left)" path
+                    delay retries_left);
               Eio.Time.sleep client.clock delay;
               request client ~meth ~path ~headers ?body
                 ~retries_left:(retries_left - 1) ~current_delay:(delay *. 1.5)
                 ()
           | error_result -> error_result)
     | Error e when is_retryable e && retries_left > 0 ->
-        Log.info (fun m -> m
-          "Retrying request to %s due to connection error in %.2fs (%d retries left)"
-          path current_delay retries_left);
+        Log.info (fun m ->
+            m
+              "Retrying request to %s due to connection error in %.2fs (%d \
+               retries left)"
+              path current_delay retries_left);
         Eio.Time.sleep client.clock current_delay;
         request client ~meth ~path ~headers ?body
           ~retries_left:(retries_left - 1) ~current_delay:(current_delay *. 1.5)
@@ -619,8 +622,9 @@ module Messages = struct
 
   let create client ?max_tokens ?temperature ?top_k ?top_p ?stop_sequences
       ?system ?tools ?tool_choice ?metadata ~model ~messages () =
-    Log.info (fun m -> m "Creating message with model %s, %d messages" 
-      (model_to_string model) (List.length messages));
+    Log.info (fun m ->
+        m "Creating message with model %s, %d messages" (model_to_string model)
+          (List.length messages));
     let body_json =
       create_request_body ~model ~messages ?max_tokens ?temperature ?top_k
         ?top_p ?stop_sequences ?system ?tools ?tool_choice ?metadata ()
@@ -721,8 +725,9 @@ module Messages = struct
   let create_stream client ?max_tokens ?temperature ?top_k ?top_p
       ?stop_sequences ?system ?tools ?tool_choice ?metadata ~model ~messages ()
       =
-    Log.info (fun m -> m "Creating streaming message with model %s, %d messages" 
-      (model_to_string model) (List.length messages));
+    Log.info (fun m ->
+        m "Creating streaming message with model %s, %d messages"
+          (model_to_string model) (List.length messages));
     let body_json =
       create_request_body ~model ~messages ?max_tokens ?temperature ?top_k
         ?top_p ?stop_sequences ?system ?tools ?tool_choice ?metadata
@@ -770,10 +775,10 @@ module Messages = struct
                         (String.trim (String.concat ":" rest))
                   | _ -> () (* Ignore other fields like 'id' and comments *)
               done
-            with End_of_file -> 
-              Log.debug (fun m -> m "Stream ended normally")
+            with End_of_file -> Log.debug (fun m -> m "Stream ended normally")
           with exn ->
-            Log.err (fun m -> m "Streaming fiber exited with: %s" (Printexc.to_string exn));
+            Log.err (fun m ->
+                m "Streaming fiber exited with: %s" (Printexc.to_string exn));
             Eio.Stream.add stream Message_stop
         in
         Fiber.fork ~sw:client.sw fiber;
@@ -888,6 +893,72 @@ module Messages = struct
             (Connection_error
                (Failure "Stream ended without message_start event"))
     with exn -> Error (Connection_error exn)
+
+  (* Message Building Helpers *)
+  let user text = { role = `User; content = [ Text text ] }
+  let assistant text = { role = `Assistant; content = [ Text text ] }
+  let user_with_content content = { role = `User; content }
+  let assistant_with_content content = { role = `Assistant; content }
+
+  let tool_result_message ~tool_use_id ~content ?(is_error = false) () =
+    {
+      role = `User;
+      content =
+        [ Tool_result { tool_use_id; content; is_error = Some is_error } ];
+    }
+
+  (* Content Extraction Helpers *)
+  let extract_text blocks =
+    List.find_map
+      (function Text_block { text } -> Some text | _ -> None)
+      blocks
+
+  let extract_all_text blocks =
+    List.filter_map
+      (function Text_block { text } -> Some text | _ -> None)
+      blocks
+
+  let find_tool_use blocks =
+    List.find_map
+      (function
+        | Tool_use_block { id; name; input } -> Some (id, name, input)
+        | _ -> None)
+      blocks
+
+  let response_content_to_input = function
+    | Text_block { text } -> Text text
+    | Tool_use_block { id; name; input } -> Tool_use { id; name; input }
+    | Thinking_block _ | Redacted_thinking_block _ ->
+        failwith "Cannot convert thinking blocks to input content"
+
+  let response_to_input_content blocks =
+    List.map response_content_to_input blocks
+end
+
+module Tools = struct
+  type tool_execution_result = Success of Yojson.Safe.t | Error of string
+
+  let make_tool_result ~tool_use_id ~result =
+    let content, is_error =
+      match result with
+      | Success json -> (Yojson.Safe.to_string json, false)
+      | Error err ->
+          let error_json = `Assoc [ ("error", `String err) ] in
+          (Yojson.Safe.to_string error_json, true)
+    in
+    Tool_result { tool_use_id; content; is_error = Some is_error }
+
+  let requires_tool_execution blocks =
+    List.exists
+      (function Messages.Tool_use_block _ -> true | _ -> false)
+      blocks
+
+  let extract_tool_calls blocks =
+    List.filter_map
+      (function
+        | Messages.Tool_use_block { id; name; input } -> Some (id, name, input)
+        | _ -> None)
+      blocks
 end
 
 module Models = struct
@@ -959,7 +1030,8 @@ module Batches = struct
   (* Use the generic page_of_yojson function defined above *)
 
   let create client ~(requests : request list) () =
-    Log.info (fun m -> m "Creating batch with %d requests" (List.length requests));
+    Log.info (fun m ->
+        m "Creating batch with %d requests" (List.length requests));
     let body_json =
       `Assoc
         [
@@ -1066,7 +1138,8 @@ module Batches = struct
               done
             with End_of_file -> ()
           with exn ->
-            Log.err (fun m -> m "Results stream exited with: %s" (Printexc.to_string exn))
+            Log.err (fun m ->
+                m "Results stream exited with: %s" (Printexc.to_string exn))
         in
         Fiber.fork ~sw:client.sw fiber;
         Ok stream
@@ -1088,7 +1161,8 @@ module Beta = struct
     let beta_header = ("anthropic-beta", "files-api-2025-04-14")
 
     let upload client ~filename ~media_type ~content () =
-      Log.info (fun m -> m "Uploading file: %s (media_type: %s)" filename media_type);
+      Log.info (fun m ->
+          m "Uploading file: %s (media_type: %s)" filename media_type);
       Random.self_init ();
       let boundary =
         "---------------------------" ^ string_of_int (Random.bits ())
