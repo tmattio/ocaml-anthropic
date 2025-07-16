@@ -4,7 +4,7 @@ open Anthropic
 let () =
   Eio_main.run @@ fun env ->
   Switch.run @@ fun sw ->
-  let client = create ~sw ~env () in
+  let client = create_client ~sw ~env () in
 
   let content =
     "Write me a function to call the Anthropic message API in Node.js using \
@@ -18,7 +18,7 @@ let () =
   let messages = [ Message.user [ Content_block.text content ] ] in
 
   match
-    Messages.create_stream client ~max_tokens:1024
+    Messages.send_stream client ~max_tokens:1024
       ~model:`Claude_3_5_Sonnet_20240620 ~messages ~stop_sequences:[ "```\n" ]
       ()
   with

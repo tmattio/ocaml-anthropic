@@ -23,7 +23,7 @@
           [ Message.user [ Content_block.text "Hello, Claude!" ] ]
         in
         match
-          Messages.create client ~max_tokens:1024
+          Messages.send client ~max_tokens:1024
             ~model:`Claude_3_5_Sonnet_20240620 ~messages ()
         with
         | Ok response -> (
@@ -269,7 +269,7 @@ module Content_block : sig
 
   val tool_result :
     tool_use_id:string ->
-    content:string ->
+    content:Yojson.Safe.t ->
     ?is_error:bool ->
     unit ->
     input_content_block
@@ -277,18 +277,19 @@ module Content_block : sig
       block.
 
       Tool results must reference a [tool_use_id] from a previous assistant
-      message. Set [is_error] to [true] when the tool execution failed.
+      message. Set [is_error] to [true] when the tool execution failed. The
+      [content] parameter accepts structured JSON data which will be
+      automatically serialized.
 
       Example: Reports a successful tool execution.
       {[
         let result =
           Content_block.tool_result ~tool_use_id:"toolu_01A09q90qw90lq917835lq9"
-            ~content:"{\"temperature\": 72}" ()
+            ~content:(`Assoc [ ("temperature", `Int 72) ])
+            ()
         in
         match result with
-        | Tool_result { content = "{\"temperature\": 72}"; is_error = None; _ }
-          ->
-            true
+        | Tool_result { content = _; is_error = None; _ } -> true
         | _ -> false
       ]} *)
 
@@ -374,42 +375,7 @@ type tool = {
 
     Tools enable Claude to interact with external systems or perform
     computations. The [input_schema] must be a valid JSON Schema object
-    describing the expected parameters.
-
-    Example: Defines a weather lookup tool.
-    {[
-      let weather_tool =
-        {
-          name = "get_weather";
-          description = Some "Get the current weather in a given location";
-          input_schema =
-            `Assoc
-              [
-                ("type", `String "object");
-                ( "properties",
-                  `Assoc
-                    [
-                      ( "location",
-                        `Assoc
-                          [
-                            ("type", `String "string");
-                            ( "description",
-                              `String
-                                "The city and state, e.g. San Francisco, CA" );
-                          ] );
-                      ( "unit",
-                        `Assoc
-                          [
-                            ("type", `String "string");
-                            ( "enum",
-                              `List [ `String "celsius"; `String "fahrenheit" ]
-                            );
-                          ] );
-                    ] );
-                ("required", `List [ `String "location" ]);
-              ];
-        }
-    ]} *)
+    describing the expected parameters. *)
 
 (** [tool_choice] controls how Claude selects tools during generation.
 
@@ -434,7 +400,7 @@ type metadata = {
 
 (** {1 Client Creation} *)
 
-val create :
+val create_client :
   sw:Eio.Switch.t ->
   env:< net : 'a Eio.Net.t ; clock : float Eio.Time.clock_ty Eio.Std.r ; .. > ->
   ?api_key:string ->
@@ -442,8 +408,8 @@ val create :
   ?max_retries:int ->
   unit ->
   client
-(** [create ~sw ~env ?api_key ?base_url ?max_retries ()] creates a new API
-    client.
+(** [create_client ~sw ~env ?api_key ?base_url ?max_retries ()] creates a new
+    API client.
 
     The client manages connection pooling, automatic retries, and request
     authentication. It requires an Eio switch for lifecycle management and an
@@ -575,7 +541,7 @@ module Messages : sig
     | Message_stop  (** End of the message stream. *)
     | Ping  (** Keep-alive signal. *)
 
-  val create :
+  val send :
     client ->
     ?max_tokens:int ->
     ?temperature:float ->
@@ -590,11 +556,14 @@ module Messages : sig
     messages:message list ->
     unit ->
     (response, error) result
-  (** [create client ~model ~messages ?max_tokens ... ()] sends messages and
-      awaits a complete response.
+  (** [send client ~model ~messages ?max_tokens ... ()] sends messages to Claude
+      and awaits a complete response.
 
       This is the primary function for synchronous conversations with Claude.
       The response contains all generated content at once.
+
+      For streaming responses, see {!send_stream}. For simple text queries, see
+      {!simple_query}.
 
       @param max_tokens Maximum tokens to generate. Required for some models.
       @param temperature
@@ -616,7 +585,7 @@ module Messages : sig
       Example: Sends a simple message.
       {[
         let response =
-          Messages.create client ~model:`Claude_3_5_Sonnet_Latest
+          Messages.send client ~model:`Claude_3_5_Sonnet_Latest
             ~messages:[ Message.user [ Content_block.text "Hello!" ] ]
             ~max_tokens:1000 ()
         in
@@ -649,12 +618,12 @@ module Messages : sig
                 ];
           }
         in
-        Messages.create client ~model:`Claude_3_5_Sonnet_Latest
+        Messages.send client ~model:`Claude_3_5_Sonnet_Latest
           ~messages:[ Message.user [ Content_block.text "What is 15 * 37?" ] ]
           ~tools:[ calc_tool ] ~max_tokens:500 ()
       ]} *)
 
-  val create_stream :
+  val send_stream :
     client ->
     ?max_tokens:int ->
     ?temperature:float ->
@@ -669,18 +638,21 @@ module Messages : sig
     messages:message list ->
     unit ->
     (stream_event Eio.Stream.t, error) result
-  (** [create_stream client ~model ~messages ... ()] streams the response
-      incrementally.
+  (** [send_stream client ~model ~messages ... ()] sends messages to Claude and
+      streams the response incrementally.
 
       Returns an Eio stream of events, enabling real-time processing of Claude's
       response. The stream automatically closes when the response completes.
 
-      Parameters are identical to {!create}.
+      Parameters are identical to {!send}.
+
+      For higher-level stream processing, see {!iter_stream} for callbacks or
+      {!accumulate_stream} to collect the stream into a final response.
 
       Example: Prints text as it arrives.
       {[
         match
-          Messages.create_stream client ~model ~messages ~max_tokens:1000 ()
+          Messages.send_stream client ~model ~messages ~max_tokens:1000 ()
         with
         | Ok stream ->
             Eio.Stream.iter
@@ -800,15 +772,23 @@ module Messages : sig
       content blocks. *)
 
   val tool_result_message :
-    tool_use_id:string -> content:string -> ?is_error:bool -> unit -> message
+    tool_use_id:string ->
+    content:Yojson.Safe.t ->
+    ?is_error:bool ->
+    unit ->
+    message
   (** [tool_result_message ~tool_use_id ~content ?is_error ()] creates a user
       message containing a tool result.
+
+      The [content] parameter accepts structured JSON data which will be
+      automatically serialized.
 
       Example:
       {[
         let msg =
           Messages.tool_result_message ~tool_use_id:"tool_123"
-            ~content:"{\"result\": 42}" ()
+            ~content:(`Assoc [ ("result", `Int 42) ])
+            ()
       ]} *)
 
   (** {2 Content Extraction Helpers} *)
@@ -1003,14 +983,14 @@ module Batches : sig
       Each response maps back to its original request via [custom_id]. Failed
       requests include structured error information. *)
 
-  val create : client -> requests:request list -> unit -> (t, error) result
-  (** [create client ~requests ()] submits a new batch for processing.
+  val submit : client -> requests:request list -> unit -> (t, error) result
+  (** [submit client ~requests ()] submits a new batch for processing.
 
       @param requests List of message requests to process (max 10,000).
 
       @raise Api_error if the batch is too large or malformed.
 
-      Example: Creates a batch of similar requests.
+      Example: Submits a batch of similar requests.
       {[
         let make_request i =
           {
@@ -1035,8 +1015,8 @@ module Batches : sig
           }
         in
         let requests = List.init 100 make_request in
-        match Batches.create client ~requests () with
-        | Ok batch -> Printf.printf "Created batch %s\n" batch.id
+        match Batches.submit client ~requests () with
+        | Ok batch -> Printf.printf "Submitted batch %s\n" batch.id
         | Error e -> Printf.eprintf "Error: %s\n" (string_of_error e)
       ]} *)
 
@@ -1240,7 +1220,7 @@ module Beta : sig
 
         Use beta messages to include file references from the Files API. *)
 
-    val create_with_betas :
+    val send_with_betas :
       client ->
       ?betas:(string * string) list ->
       ?max_tokens:int ->
@@ -1256,8 +1236,8 @@ module Beta : sig
       messages:beta_message list ->
       unit ->
       (response, error) result
-    (** [create_with_betas client ?betas ... ~messages ()] creates a message
-        with beta features.
+    (** [send_with_betas client ?betas ... ~messages ()] sends a message with
+        beta features.
 
         This function extends the standard create with support for beta content
         types and features.
@@ -1282,7 +1262,7 @@ module Beta : sig
               ]
             }
           ] in
-          Beta.Messages.create_with_betas client
+          Beta.Messages.send_with_betas client
             ~betas:["files-api-2025-04-14"]
             ~model:`Claude_3_5_Sonnet_Latest
             ~messages

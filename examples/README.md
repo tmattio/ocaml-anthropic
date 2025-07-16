@@ -24,7 +24,7 @@ dune exec examples/basic_message.exe
 ```
 
 **Key concepts:**
-- Using `Messages.create` for synchronous responses
+- Using `Messages.send` for synchronous responses
 - Pattern matching on response content blocks
 - Converting errors to readable strings
 
@@ -40,7 +40,7 @@ dune exec examples/message_streaming.exe
 ```
 
 **Key concepts:**
-- Using `Messages.create_stream` for streaming
+- Using `Messages.send_stream` for streaming
 - Processing `Content_block_delta` events
 - Real-time output with `flush stdout`
 - Stream completion handling
@@ -102,7 +102,7 @@ match operation with
 ```ocaml
 Eio_main.run @@ fun env ->
 Switch.run @@ fun sw ->
-let client = Anthropic.create ~sw ~env () in
+let client = Anthropic.create_client ~sw ~env () in
 (* Use client *)
 ```
 

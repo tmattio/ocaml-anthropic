@@ -213,7 +213,8 @@ module Content_block = struct
     Document { name; content; media_type }
 
   let tool_result ~tool_use_id ~content ?is_error () =
-    Tool_result { tool_use_id; content; is_error }
+    Tool_result
+      { tool_use_id; content = Yojson.Safe.to_string content; is_error }
 
   let tool_use ~id ~name ~input = Tool_use { id; name; input }
 end
@@ -263,7 +264,7 @@ let default_https ~authenticator =
     in
     Tls_eio.client_of_flow ?host tls_config raw
 
-let create ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
+let create_client ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
     ?(max_retries = 2) () =
   Log.debug (fun m -> m "Creating Anthropic client with base URL: %s" base_url);
   let api_key =
@@ -620,10 +621,10 @@ module Messages = struct
     let body = if stream then ("stream", `Bool true) :: body else body in
     `Assoc body
 
-  let create client ?max_tokens ?temperature ?top_k ?top_p ?stop_sequences
-      ?system ?tools ?tool_choice ?metadata ~model ~messages () =
+  let send client ?max_tokens ?temperature ?top_k ?top_p ?stop_sequences ?system
+      ?tools ?tool_choice ?metadata ~model ~messages () =
     Log.info (fun m ->
-        m "Creating message with model %s, %d messages" (model_to_string model)
+        m "Sending message with model %s, %d messages" (model_to_string model)
           (List.length messages));
     let body_json =
       create_request_body ~model ~messages ?max_tokens ?temperature ?top_k
@@ -722,9 +723,8 @@ module Messages = struct
     with Yojson.Json_error msg ->
       Error ("JSON parsing error in stream: " ^ msg)
 
-  let create_stream client ?max_tokens ?temperature ?top_k ?top_p
-      ?stop_sequences ?system ?tools ?tool_choice ?metadata ~model ~messages ()
-      =
+  let send_stream client ?max_tokens ?temperature ?top_k ?top_p ?stop_sequences
+      ?system ?tools ?tool_choice ?metadata ~model ~messages () =
     Log.info (fun m ->
         m "Creating streaming message with model %s, %d messages"
           (model_to_string model) (List.length messages));
@@ -789,9 +789,8 @@ module Messages = struct
       ?system ?tools ?tool_choice ?metadata ~model ~messages ~on_event ~on_error
       () =
     match
-      create_stream client ?max_tokens ?temperature ?top_k ?top_p
-        ?stop_sequences ?system ?tools ?tool_choice ?metadata ~model ~messages
-        ()
+      send_stream client ?max_tokens ?temperature ?top_k ?top_p ?stop_sequences
+        ?system ?tools ?tool_choice ?metadata ~model ~messages ()
     with
     | Ok stream ->
         let rec loop () =
@@ -904,7 +903,14 @@ module Messages = struct
     {
       role = `User;
       content =
-        [ Tool_result { tool_use_id; content; is_error = Some is_error } ];
+        [
+          Tool_result
+            {
+              tool_use_id;
+              content = Yojson.Safe.to_string content;
+              is_error = Some is_error;
+            };
+        ];
     }
 
   (* Content Extraction Helpers *)
@@ -1029,9 +1035,9 @@ module Batches = struct
 
   (* Use the generic page_of_yojson function defined above *)
 
-  let create client ~(requests : request list) () =
+  let submit client ~(requests : request list) () =
     Log.info (fun m ->
-        m "Creating batch with %d requests" (List.length requests));
+        m "Submitting batch with %d requests" (List.length requests));
     let body_json =
       `Assoc
         [
@@ -1339,7 +1345,7 @@ module Beta = struct
       let body = add_opt "metadata" metadata metadata_to_yojson body in
       `Assoc body
 
-    let create_with_betas client ?(betas = []) ?max_tokens ?temperature ?top_k
+    let send_with_betas client ?(betas = []) ?max_tokens ?temperature ?top_k
         ?top_p ?stop_sequences ?system ?tools ?tool_choice ?metadata ~model
         ~messages () =
       let body_json =

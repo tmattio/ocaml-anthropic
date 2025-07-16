@@ -30,7 +30,7 @@ let weather_to_json weather =
 let () =
   Eio_main.run @@ fun env ->
   Switch.run @@ fun sw ->
-  let client = create ~sw ~env () in
+  let client = create_client ~sw ~env () in
 
   let content = "What is the weather in San Francisco, CA?" in
 
@@ -130,7 +130,7 @@ let () =
 
   let rec loop () =
     match
-      Messages.create client ~model:`Claude_3_5_Sonnet_20240620 ~max_tokens:1024
+      Messages.send client ~model:`Claude_3_5_Sonnet_20240620 ~max_tokens:1024
         ~messages:!messages ~tools ()
     with
     | Error err -> print_endline ("Error: " ^ string_of_error err)
@@ -200,8 +200,7 @@ let () =
                   !tool_results
                   @ [
                       Content_block.tool_result ~tool_use_id:id
-                        ~content:(Yojson.Safe.to_string result_json)
-                        ();
+                        ~content:result_json ();
                     ]
             | _ -> ())
           response.content;

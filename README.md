@@ -27,14 +27,14 @@ let () =
   Eio_main.run @@ fun env ->
   Switch.run @@ fun sw ->
   (* Create client - reads API key from ANTHROPIC_API_KEY env var *)
-  let client = create ~sw ~env () in
+  let client = create_client ~sw ~env () in
   
   (* Send a message *)
   let messages = [
     Message.user [Content_block.text "What is OCaml?"]
   ] in
   
-  match Messages.create client ~model:`Claude_3_5_Haiku_Latest 
+  match Messages.send client ~model:`Claude_3_5_Haiku_Latest 
           ~messages ~max_tokens:1000 () with
   | Ok response ->
       List.iter (function
@@ -50,7 +50,7 @@ let () =
 
 ```ocaml
 (* Stream responses in real-time *)
-match Messages.create_stream client ~model:`Claude_3_5_Sonnet_Latest
+match Messages.send_stream client ~model:`Claude_3_5_Sonnet_Latest
         ~messages ~max_tokens:1000 () with
 | Ok stream ->
     Eio.Stream.iter (function
@@ -81,7 +81,7 @@ let weather_tool = {
 } in
 
 (* Let Claude use the tool *)
-Messages.create client ~model:`Claude_3_5_Haiku_Latest
+Messages.send client ~model:`Claude_3_5_Haiku_Latest
   ~messages:[Message.user [Content_block.text "What's the weather in Paris?"]]
   ~tools:[weather_tool]
   ~max_tokens:1000 ()
@@ -105,9 +105,9 @@ let requests = List.init 100 (fun i -> {
   ]
 }) in
 
-match Batches.create client ~requests () with
+match Batches.submit client ~requests () with
 | Ok batch -> 
-    Printf.printf "Batch %s created, processing %d requests\n" 
+    Printf.printf "Batch %s sent, processing %d requests\n" 
       batch.id (List.length requests)
 | Error e -> Printf.eprintf "Error: %s\n" (string_of_error e)
 ```
@@ -128,21 +128,21 @@ match Beta.Files.upload client ~filename:"data.csv"
         Beta.Messages.File { id = file.id }
       ]
     }] in
-    Beta.Messages.create_with_betas client
-      ~betas:["files-api-2025-04-14"]
+    Beta.Messages.send_with_betas client
+      ~betas:[("anthropic-beta", "files-api-2025-04-14")]
       ~model:`Claude_3_5_Sonnet_Latest
       ~messages ~max_tokens:2000 ()
-| Error e -> Error e
+| Error e -> Printf.eprintf "Error: %s\n" (string_of_error e)
 ```
 
 ## Configuration
 
 ### Environment Variables
-- `ANTHROPIC_API_KEY`: Your Anthropic API key (required if not passed to `create`)
+- `ANTHROPIC_API_KEY`: Your Anthropic API key (required if not passed to `create_client`)
 
 ### Client Options
 ```ocaml
-let client = create ~sw ~env 
+let client = create_client ~sw ~env 
   ~api_key:"sk-ant-..." 
   ~base_url:"https://api.anthropic.com/v1"
   ~max_retries:5 
