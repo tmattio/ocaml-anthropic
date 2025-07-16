@@ -13,7 +13,7 @@
 
 (license ISC)
 
-(documentation https://tmattio.github.io/ocaml-anthropic/)
+(implicit_transitive_deps false)
 
 (package
  (name anthropic)

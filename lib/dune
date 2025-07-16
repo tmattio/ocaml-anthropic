@@ -1,6 +1,16 @@
 (library
  (name anthropic)
  (public_name anthropic)
- (libraries eio cohttp-eio yojson tls-eio ca-certs mirage-crypto-rng.unix)
+ (libraries
+  uri
+  eio
+  cohttp
+  cohttp-eio
+  yojson
+  tls-eio
+  ca-certs
+  mirage-crypto-rng.unix
+  tls
+  domain-name)
  (preprocess
   (pps ppx_deriving_yojson)))

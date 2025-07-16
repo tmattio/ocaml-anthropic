@@ -10,7 +10,6 @@ authors: ["Thibaut Mattio <thibaut.mattio@gmail.com>"]
 license: "ISC"
 tags: ["anthropic" "claude" "ai" "llm" "api" "client" "streaming" "eio"]
 homepage: "https://github.com/tmattio/ocaml-anthropic"
-doc: "https://tmattio.github.io/ocaml-anthropic/"
 bug-reports: "https://github.com/tmattio/ocaml-anthropic/issues"
 depends: [
   "dune" {>= "3.19"}
