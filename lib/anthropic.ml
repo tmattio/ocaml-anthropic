@@ -1,9 +1,11 @@
 open Eio.Std
 module Log = (val Logs.src_log (Logs.Src.create "anthropic") : Logs.LOG)
 
+type auth_method = Api_key of string | Bearer_token of string
+
 type client = {
   sw : Eio.Switch.t;
-  api_key : string;
+  auth : auth_method;
   base_url : Uri.t;
   cohttp_client : Cohttp_eio.Client.t;
   max_retries : int;
@@ -268,26 +270,32 @@ let default_https ~authenticator =
     in
     Tls_eio.client_of_flow ?host tls_config raw
 
-let create_client ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
-    ?(max_retries = 2) () =
+let create_client ~sw ~env ?api_key ?auth_token
+    ?(base_url = "https://api.anthropic.com/v1") ?(max_retries = 2) () =
   Log.debug (fun m -> m "Creating Anthropic client with base URL: %s" base_url);
-  let api_key =
-    match api_key with
-    | Some key ->
+  let auth =
+    match (api_key, auth_token) with
+    | Some key, None ->
         Log.debug (fun m -> m "Using provided API key");
-        key
-    | None -> (
+        Api_key key
+    | None, Some token ->
+        Log.debug (fun m -> m "Using provided OAuth token");
+        Bearer_token token
+    | None, None -> (
         match Sys.getenv_opt "ANTHROPIC_API_KEY" with
         | Some key ->
             Log.debug (fun m ->
                 m "Using API key from ANTHROPIC_API_KEY environment variable");
-            key
+            Api_key key
         | None ->
-            Log.err (fun m -> m "No API key provided");
+            Log.err (fun m -> m "No authentication provided");
             raise
               (Invalid_argument
-                 "API key must be provided either via the 'api_key' argument \
-                  or the ANTHROPIC_API_KEY environment variable"))
+                 "Authentication must be provided either via 'api_key', \
+                  'auth_token', or the ANTHROPIC_API_KEY environment variable"))
+    | Some _, Some _ ->
+        raise
+          (Invalid_argument "Cannot provide both 'api_key' and 'auth_token'")
   in
   (* Initialize RNG for TLS - this is idempotent so safe to call multiple times *)
   Mirage_crypto_rng_unix.use_default ();
@@ -300,7 +308,7 @@ let create_client ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
   in
   {
     sw;
-    api_key;
+    auth;
     base_url = Uri.of_string base_url;
     cohttp_client =
       Cohttp_eio.Client.make
@@ -311,13 +319,25 @@ let create_client ~sw ~env ?api_key ?(base_url = "https://api.anthropic.com/v1")
   }
 
 module Api_helpers = struct
-  let base_headers api_key =
-    Cohttp.Header.of_list
+  let build_auth_headers auth =
+    match auth with
+    | Api_key key -> Cohttp.Header.init_with "x-api-key" key
+    | Bearer_token token ->
+        Cohttp.Header.init_with "Authorization" ("Bearer " ^ token)
+
+  let base_headers auth =
+    let auth_headers = build_auth_headers auth in
+    let base_list =
       [
-        ("x-api-key", api_key);
-        ("content-type", "application/json");
-        ("anthropic-version", "2023-06-01");
+        ("content-type", "application/json"); ("anthropic-version", "2023-06-01");
       ]
+    in
+    let headers_list =
+      match auth with
+      | Bearer_token _ -> ("anthropic-beta", "oauth-2025-04-20") :: base_list
+      | Api_key _ -> base_list
+    in
+    Cohttp.Header.add_list auth_headers headers_list
 
   let add_beta_headers headers betas =
     List.fold_left
@@ -437,7 +457,7 @@ module Api_helpers = struct
     | Error e -> Error e
 
   let request_json client ~meth ~path ?(betas = []) ?body of_yojson =
-    let headers = add_beta_headers (base_headers client.api_key) betas in
+    let headers = add_beta_headers (base_headers client.auth) betas in
     let body = Option.map Cohttp_eio.Body.of_string body in
     match
       request client ~meth ~path ~headers ?body ~retries_left:client.max_retries
@@ -756,7 +776,7 @@ module Messages = struct
         ~stream:true ()
     in
     let body_str = Yojson.Safe.to_string body_json in
-    let headers = Api_helpers.base_headers client.api_key in
+    let headers = Api_helpers.base_headers client.auth in
 
     match
       Api_helpers.request_stream client ~meth:`POST ~path:"/messages" ~headers
@@ -1106,7 +1126,7 @@ module Batches = struct
     let path = "/messages/batches/" ^ batch_id ^ "/results" in
     let headers =
       Api_helpers.add_beta_headers
-        (Api_helpers.base_headers client.api_key)
+        (Api_helpers.base_headers client.auth)
         [ beta_header ]
     in
     match Api_helpers.request_stream client ~meth:`GET ~path ~headers () with
@@ -1204,14 +1224,25 @@ module Beta = struct
       let boundary =
         "---------------------------" ^ string_of_int (Random.bits ())
       in
+      let auth_header =
+        match client.auth with
+        | Api_key key -> ("x-api-key", key)
+        | Bearer_token token -> ("Authorization", "Bearer " ^ token)
+      in
+      let beta_headers =
+        match client.auth with
+        | Bearer_token _ ->
+            [ ("anthropic-beta", "files-api-2025-04-14,oauth-2025-04-20") ]
+        | Api_key _ -> [ ("anthropic-beta", "files-api-2025-04-14") ]
+      in
       let headers =
         Cohttp.Header.of_list
-          [
-            ("x-api-key", client.api_key);
-            ("anthropic-version", "2023-06-01");
-            ("anthropic-beta", "files-api-2025-04-14");
-            ("content-type", "multipart/form-data; boundary=" ^ boundary);
-          ]
+          ([
+             auth_header;
+             ("anthropic-version", "2023-06-01");
+             ("content-type", "multipart/form-data; boundary=" ^ boundary);
+           ]
+          @ beta_headers)
       in
       let buf = Buffer.create 4096 in
       Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
@@ -1271,7 +1302,7 @@ module Beta = struct
       let path = "/files/" ^ file_id ^ "/content" in
       let headers =
         Api_helpers.add_beta_headers
-          (Api_helpers.base_headers client.api_key)
+          (Api_helpers.base_headers client.auth)
           [ beta_header ]
       in
       Api_helpers.request client ~meth:`GET ~path ~headers

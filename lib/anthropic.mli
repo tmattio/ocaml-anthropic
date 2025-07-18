@@ -37,6 +37,10 @@
 
 (** {1 Core Types} *)
 
+type auth_method =
+  | Api_key of string
+  | Bearer_token of string  (** Authentication method for the client *)
+
 type client
 (** [client] represents a configured Anthropic API client.
 
@@ -315,12 +319,13 @@ val create_client :
   sw:Eio.Switch.t ->
   env:< net : 'a Eio.Net.t ; clock : float Eio.Time.clock_ty Eio.Std.r ; .. > ->
   ?api_key:string ->
+  ?auth_token:string ->
   ?base_url:string ->
   ?max_retries:int ->
   unit ->
   client
-(** [create_client ~sw ~env ?api_key ?base_url ?max_retries ()] creates a new
-    API client.
+(** [create_client ~sw ~env ?api_key ?auth_token ?base_url ?max_retries ()]
+    creates a new API client.
 
     The client manages connection pooling, automatic retries, and request
     authentication. It requires an Eio switch for lifecycle management and an
@@ -328,16 +333,16 @@ val create_client :
 
     @param sw The Eio switch managing the client's resources.
     @param env The Eio environment providing network and clock access.
-    @param api_key
-      The Anthropic API key. If omitted, reads from [ANTHROPIC_API_KEY]
-      environment variable.
+    @param api_key The Anthropic API key. Cannot be used with [auth_token].
+    @param auth_token
+      OAuth bearer token for authentication. Cannot be used with [api_key].
     @param base_url
       The API base URL. Defaults to ["https://api.anthropic.com/v1"].
     @param max_retries
       Maximum retry attempts for failed requests. Defaults to [2].
 
     @raise Invalid_argument
-      if no API key is provided and [ANTHROPIC_API_KEY] is not set.
+      if neither authentication method is provided or both are provided.
 
     Example: Creates a client with default settings.
     {[
