@@ -16,7 +16,8 @@ depends: [
   "ocaml"
   "cohttp"
   "cohttp-eio"
-  "eio"
+  "eio" {>= "1.2"}
+  "tls" {>= "2.0.1"}
   "tls-eio"
   "ca-certs"
   "mirage-crypto-rng"

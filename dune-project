@@ -19,10 +19,20 @@
  (name anthropic)
  (synopsis "OCaml bindings for the Anthropic API")
  (description
-  "This library provides type-safe OCaml bindings to the Anthropic API,
-   enabling interaction with Claude models. It supports both synchronous and
-   streaming responses, tool use, batch processing, and file uploads (beta).")
+  "This library provides type-safe OCaml bindings to the Anthropic API,\n   enabling interaction with Claude models. It supports both synchronous and\n   streaming responses, tool use, batch processing, and file uploads (beta).")
  (depends
-  ocaml cohttp cohttp-eio eio tls-eio ca-certs mirage-crypto-rng yojson ppx_deriving_yojson logs)
+  ocaml
+  cohttp
+  cohttp-eio
+  (eio
+   (>= 1.2))
+  (tls
+   (>= 2.0.1))
+  tls-eio
+  ca-certs
+  mirage-crypto-rng
+  yojson
+  ppx_deriving_yojson
+  logs)
  (tags
   ("anthropic" "claude" "ai" "llm" "api" "client" "streaming" "eio")))
